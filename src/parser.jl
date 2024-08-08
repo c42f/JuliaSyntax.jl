@@ -84,9 +84,15 @@ function peek_behind_pos(ps::ParseState, args...; kws...)
     peek_behind_pos(ps.stream, args...; kws...)
 end
 
-function bump(ps::ParseState, flags=EMPTY_FLAGS; skip_newlines=nothing, kws...)
+function _remap_op_kind(remap_kind, flags, k)
+    remap_kind == K"None" && !has_flags(flags, TRIVIA_FLAG) && is_operator(k) ?
+        K"Identifier" : remap_kind
+end
+
+function bump(ps::ParseState, flags=EMPTY_FLAGS; skip_newlines=nothing, remap_kind=K"None", kws...)
     skip_nl = isnothing(skip_newlines) ? ps.whitespace_newline : skip_newlines
-    bump(ps.stream, flags; skip_newlines=skip_nl, kws...)
+    remap_kind = _remap_op_kind(remap_kind, flags, peek(ps))
+    bump(ps.stream, flags; skip_newlines=skip_nl, remap_kind=remap_kind, kws...)
 end
 
 function bump_trivia(ps::ParseState, args...; kws...)
@@ -347,7 +353,8 @@ function bump_dotsplit(ps, flags=EMPTY_FLAGS;
     if is_dotted(t)
         bump_trivia(ps)
         mark = position(ps)
-        k = remap_kind != K"None" ? remap_kind : kind(t)
+        k = kind(t)
+        k = _remap_op_kind(remap_kind != K"None" ? remap_kind : k, flags, k)
         pos = bump_split(ps, (1, K".", TRIVIA_FLAG), (0, k, flags))
         if emit_dot_node
             pos = emit(ps, mark, K".")
@@ -3516,18 +3523,12 @@ function parse_atom(ps::ParseState, check_identifiers=true)
         # xx  ==>  xx
         # x₁  ==>  x₁
         bump(ps)
-    elseif is_word_operator(leading_kind)
-        # where=1 ==> (= where 1)
-        bump(ps, remap_kind=K"Identifier")
     elseif is_operator(leading_kind)
         # +     ==>  +
         # .+    ==>  (. +)
         # .=    ==>  (. =)
-        if is_dotted(peek_token(ps))
-            bump_dotsplit(ps, emit_dot_node=true)
-        else
-            bump(ps, remap_kind=K"Identifier")
-        end
+        # where=1 ==> (= where 1)
+        bump_dotsplit(ps, emit_dot_node=true)
         if check_identifiers && !is_valid_identifier(leading_kind)
             # +=   ==>  (error +=)
             # ?    ==>  (error ?)
